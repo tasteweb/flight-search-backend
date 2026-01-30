@@ -1,15 +1,17 @@
-require("dotenv").config();
+import "dotenv/config";
 
-const express = require("express");
-const axios = require("axios");
-const cors = require("cors");
+import express from "express";
+import axios from "axios";
+import cors from "cors";
+
+/* -------------------- App -------------------- */
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-/* -------------------- Basic health -------------------- */
+/* -------------------- Health -------------------- */
 
 app.get("/", (req, res) => {
   res.send("Flight search backend running");
@@ -42,7 +44,8 @@ async function getAmadeusToken() {
   );
 
   amadeusToken = response.data.access_token;
-  amadeusTokenExpiry = now + response.data.expires_in * 1000 - 60000;
+  amadeusTokenExpiry =
+    now + response.data.expires_in * 1000 - 60000;
 
   return amadeusToken;
 }
@@ -116,6 +119,7 @@ app.post("/api/search-flights", async (req, res) => {
       "Search error:",
       error.response?.data || error.message
     );
+
     res.status(500).json({
       error: "Flight search failed",
       details: error.response?.data
