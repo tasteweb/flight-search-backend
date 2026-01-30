@@ -4,8 +4,6 @@ import express from "express";
 import axios from "axios";
 import cors from "cors";
 
-/* -------------------- App -------------------- */
-
 const app = express();
 
 app.use(cors());
@@ -50,7 +48,7 @@ async function getAmadeusToken() {
   return amadeusToken;
 }
 
-/* -------------------- Search flights -------------------- */
+/* -------------------- Search flights (SAR currency) -------------------- */
 
 app.post("/api/search-flights", async (req, res) => {
   try {
@@ -74,7 +72,10 @@ app.post("/api/search-flights", async (req, res) => {
       destinationLocationCode: destination,
       departureDate: date,
       adults: adults,
-      max: 10
+      max: 10,
+
+      // 👇 THIS is what makes prices come back in Saudi Riyal
+      currencyCode: "SAR"
     };
 
     if (tripType === "roundtrip" && returnDate) {
