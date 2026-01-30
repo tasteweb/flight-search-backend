@@ -1,14 +1,29 @@
-import nodemailer from "nodemailer";
-import dotenv from "dotenv";
-dotenv.config();
+require("dotenv").config();
 
-import axios from "axios";
+const express = require("express");
+const axios = require("axios");
+const cors = require("cors");
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+/* -------------------- Basic health -------------------- */
+
+app.get("/", (req, res) => {
+  res.send("Flight search backend running");
+});
+
+/* -------------------- Amadeus token -------------------- */
 
 let amadeusToken = null;
 let amadeusTokenExpiry = 0;
 
 async function getAmadeusToken() {
-  if (amadeusToken && Date.now() < amadeusTokenExpiry) {
+  const now = Date.now();
+
+  if (amadeusToken && now < amadeusTokenExpiry) {
     return amadeusToken;
   }
 
@@ -18,7 +33,7 @@ async function getAmadeusToken() {
       grant_type: "client_credentials",
       client_id: process.env.AMADEUS_CLIENT_ID,
       client_secret: process.env.AMADEUS_CLIENT_SECRET
-    }),
+    }).toString(),
     {
       headers: {
         "Content-Type": "application/x-www-form-urlencoded"
@@ -27,50 +42,23 @@ async function getAmadeusToken() {
   );
 
   amadeusToken = response.data.access_token;
-  amadeusTokenExpiry = Date.now() + response.data.expires_in * 1000;
+  amadeusTokenExpiry = now + response.data.expires_in * 1000 - 60000;
 
   return amadeusToken;
 }
 
-const mailTransporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST,
-  port: 465,
-  secure: true, // REQUIRED for port 465
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
-
-
-
-import express from "express";
-import cors from "cors";
-
-
-const app = express();
-
-app.use(cors());
-app.use(express.json());
-
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok" });
-});
-
-app.get("/api/test-amadeus", async (req, res) => {
-  try {
-    const token = await getAmadeusToken();
-    res.json({ success: true, tokenLength: token.length });
-  } catch (error) {
-    console.error(error.response?.data || error.message);
-    res.status(500).json({ error: "Failed to get Amadeus token" });
-  }
-});
+/* -------------------- Search flights -------------------- */
 
 app.post("/api/search-flights", async (req, res) => {
   try {
-    const { origin, destination, date, returnDate, adults, tripType } = req.body;
-
+    const {
+      origin,
+      destination,
+      date,
+      returnDate,
+      adults,
+      tripType
+    } = req.body;
 
     if (!origin || !destination || !date || !adults) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -78,40 +66,38 @@ app.post("/api/search-flights", async (req, res) => {
 
     const token = await getAmadeusToken();
 
-  
+    const params = {
+      originLocationCode: origin,
+      destinationLocationCode: destination,
+      departureDate: date,
+      adults: adults,
+      max: 10
+    };
 
-const params = {
-  originLocationCode: origin,
-  destinationLocationCode: destination,
-  departureDate: date,
-  adults: adults,
-  max: 10
-};
+    if (tripType === "roundtrip" && returnDate) {
+      params.returnDate = returnDate;
+    }
 
-if (tripType === "roundtrip" && returnDate) {
-  params.returnDate = returnDate;
-}
+    const response = await axios.get(
+      "https://test.api.amadeus.com/v2/shopping/flight-offers",
+      {
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        params
+      }
+    );
 
-const response = await axios.get(
-  "https://test.api.amadeus.com/v2/shopping/flight-offers",
-  {
-    headers: { Authorization: `Bearer ${token}` },
-    params
-  }
-);
-
-
-    const normalizedFlights = response.data.data.map(flight => {
-      const itinerary = flight.itineraries[0];
-      const segments = itinerary.segments;
+    const normalizedFlights = response.data.data.map((flight) => {
+      const segments = flight.itineraries[0].segments;
 
       return {
         id: flight.id,
         price: flight.price.total,
         currency: flight.price.currency,
         stops: segments.length - 1,
-        totalDuration: itinerary.duration,
-        segments: segments.map(seg => ({
+        totalDuration: flight.itineraries[0].duration,
+        segments: segments.map((seg) => ({
           from: seg.departure.iataCode,
           to: seg.arrival.iataCode,
           depart: seg.departure.at,
@@ -120,84 +106,94 @@ const response = await axios.get(
           flightNumber: seg.number,
           duration: seg.duration
         }))
-
       };
     });
 
     res.json(normalizedFlights);
 
   } catch (error) {
-  console.error("FLIGHT SEARCH ERROR");
-  console.error("Message:", error.message);
-  console.error("Response data:", error.response?.data);
-  console.error("Status:", error.response?.status);
-  res.status(500).json({
-    error: "Flight search failed",
-    details: error.response?.data || error.message
-  });
-}
-
+    console.error(
+      "Search error:",
+      error.response?.data || error.message
+    );
+    res.status(500).json({
+      error: "Flight search failed",
+      details: error.response?.data
+    });
+  }
 });
 
+/* -------------------- Booking request (SMTP2GO HTTP API) -------------------- */
+
 app.post("/api/booking-request", async (req, res) => {
-  try {
-    const { flight, name, email, phone, notes } = req.body;
+  const { name, email, phone, notes, flight } = req.body;
 
-    if (!flight || !name || !email) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
+  if (!name || !email || !flight || !flight.segments) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
 
-
-    const emailText = `
+  const textBody = `
 New Flight Booking Request
 
 Passenger Name: ${name}
 Email: ${email}
 Phone: ${phone || "N/A"}
 
---- FLIGHT IDENTIFICATION ---
-Amadeus Offer ID: ${flight.id}
+--- FLIGHT DETAILS ---
 
-Search Summary:
-Route: ${flight.segments[0].from} → ${flight.segments[flight.segments.length - 1].to}
-Stops: ${flight.stops}
-Total Duration: ${flight.totalDuration}
-Displayed Price: ${flight.price} ${flight.currency}
+${flight.segments.map(
+  (s, i) =>
+    `${i + 1}. ${s.airline}${s.flightNumber}  ${s.from} → ${s.to}
+Depart: ${s.depart}
+Arrive: ${s.arrive}`
+).join("\n\n")}
 
-Segments:
-${flight.segments.map((s, i) =>
-  `${i + 1}. ${s.airline}${s.flightNumber} | ${s.from} → ${s.to}
-     Depart: ${s.depart}
-     Arrive: ${s.arrive}`
-).join("\n")}
+Displayed price: ${flight.price} ${flight.currency}
 
 Notes from customer:
 ${notes || "None"}
-
-IMPORTANT:
-- Price is indicative and subject to availability
-- Please reprice before ticketing
-- Booking requested via website at ${new Date().toISOString()}
 `;
 
+  try {
+    const response = await axios.post(
+      "https://api.smtp2go.com/v3/email/send",
+      {
+        api_key: process.env.SMTP2GO_API_KEY,
+        to: [process.env.AGENCY_EMAIL],
+        sender: process.env.FROM_EMAIL,
+        subject: "New Flight Booking Request",
+        text_body: textBody
+      },
+      { timeout: 10000 }
+    );
 
-    await mailTransporter.sendMail({
-      from: `"Flight Requests" <${process.env.FROM_EMAIL}>`,
-      to: process.env.AGENCY_EMAIL,
-      subject: "New Flight Booking Request",
-      text: emailText
+    if (
+      response.data &&
+      response.data.data &&
+      response.data.data.succeeded > 0
+    ) {
+      return res.json({ success: true });
+    }
+
+    console.error("SMTP2GO API failed:", response.data);
+    return res.status(500).json({ error: "Email API failed" });
+
+  } catch (err) {
+    console.error(
+      "SMTP2GO HTTP error:",
+      err.response?.data || err.message
+    );
+
+    return res.status(500).json({
+      error: "Failed to send booking request"
     });
-
-    res.json({ success: true });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to send booking request" });
   }
 });
 
+/* -------------------- Start server -------------------- */
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log("Server running on port", PORT);
 });
