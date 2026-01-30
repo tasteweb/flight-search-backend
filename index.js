@@ -8,8 +8,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ---------------- Health ---------------- */
-
 app.get("/", (req, res) => {
   res.send("Backend running");
 });
@@ -41,32 +39,39 @@ async function getAmadeusToken() {
   return amadeusToken;
 }
 
-/* ---------------- city / airport resolver ---------------- */
+/* ---------------- city or airport resolver ---------------- */
 
 async function resolveLocation(input, token) {
-  if (input.length === 3) return input.toUpperCase();
+  const trimmed = input.trim();
+
+  if (/^[a-zA-Z]{3}$/.test(trimmed)) {
+    return trimmed.toUpperCase();
+  }
 
   const res = await axios.get(
     "https://test.api.amadeus.com/v1/reference-data/locations",
     {
       headers: { Authorization: `Bearer ${token}` },
       params: {
-        keyword: input,
-        subType: "AIRPORT,CITY"
+        keyword: trimmed,
+        subType: "AIRPORT,CITY",
+        page: { limit: 10 }
       }
     }
   );
 
-  const firstAirport = res.data.data.find(
-    l => l.subType === "AIRPORT"
-  );
+  const data = res.data?.data || [];
 
-  if (!firstAirport) throw new Error("Location not found");
+  const airport = data.find(l => l.subType === "AIRPORT");
+  const city = data.find(l => l.subType === "CITY");
 
-  return firstAirport.iataCode;
+  if (airport) return airport.iataCode;
+  if (city) return city.iataCode;
+
+  return null;
 }
 
-/* ---------------- Search flights ---------------- */
+/* ---------------- search flights ---------------- */
 
 app.post("/api/search-flights", async (req, res) => {
   try {
@@ -81,10 +86,26 @@ app.post("/api/search-flights", async (req, res) => {
       page = 1
     } = req.body;
 
+    if (!origin || !destination || !date || !adults) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
     const token = await getAmadeusToken();
 
     const originCode = await resolveLocation(origin, token);
     const destinationCode = await resolveLocation(destination, token);
+
+    if (!originCode) {
+      return res.status(400).json({
+        error: "Origin location not found"
+      });
+    }
+
+    if (!destinationCode) {
+      return res.status(400).json({
+        error: "Destination location not found"
+      });
+    }
 
     const params = {
       originLocationCode: originCode,
@@ -108,13 +129,14 @@ app.post("/api/search-flights", async (req, res) => {
       }
     );
 
-    const offers = response.data.data || [];
+    const offers = response.data?.data || [];
 
     const pageSize = 10;
     const start = (page - 1) * pageSize;
+
     const slice = offers.slice(start, start + pageSize);
 
-    const normalized = slice.map((flight) => {
+    const normalized = slice.map(flight => {
       const itinerary = flight.itineraries[0];
       const segments = itinerary.segments;
 
@@ -150,13 +172,16 @@ app.post("/api/search-flights", async (req, res) => {
       results: normalized
     });
 
-  } catch (e) {
-    console.error(e.response?.data || e.message);
-    res.status(500).json({ error: "Flight search failed" });
+  } catch (err) {
+    console.error("SEARCH ERROR:", err.response?.data || err.message);
+
+    res.status(500).json({
+      error: "Flight search failed"
+    });
   }
 });
 
-/* ---------------- Booking request + customer email ---------------- */
+/* ---------------- booking request (unchanged) ---------------- */
 
 app.post("/api/booking-request", async (req, res) => {
   const { name, email, phone, notes, flight } = req.body;
