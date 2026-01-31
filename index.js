@@ -181,7 +181,7 @@ app.post("/api/search-flights", async (req, res) => {
   }
 });
 
-/* ---------------- booking request (unchanged) ---------------- */
+/* ---------------- booking request (UPDATED ONLY HERE) ---------------- */
 
 app.post("/api/booking-request", async (req, res) => {
   const { name, email, phone, notes, flight } = req.body;
@@ -190,21 +190,72 @@ app.post("/api/booking-request", async (req, res) => {
     return res.status(400).json({ error: "Missing fields" });
   }
 
+  /* -------- layover calculation -------- */
+
+  let layoverText = "None";
+
+  if (flight.segments && flight.segments.length > 1) {
+    layoverText = "";
+
+    for (let i = 0; i < flight.segments.length - 1; i++) {
+      const arrive = new Date(flight.segments[i].arrive);
+      const depart = new Date(flight.segments[i + 1].depart);
+
+      const mins = Math.floor((depart - arrive) / 60000);
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+
+      layoverText += `Layover in ${flight.segments[i].to}: ${h}h ${m}m\n`;
+    }
+  }
+
+  /* -------- baggage formatting -------- */
+
+  let baggageText = "Not available";
+
+  if (flight.baggage && flight.baggage.length) {
+    baggageText = flight.baggage
+      .map((b, i) =>
+        `Segment ${i + 1}: Checked ${b.checkedBags}, Cabin ${b.cabinBags}`
+      )
+      .join("\n");
+  }
+
   const agencyText = `
 New booking request
 
+Customer details
+----------------
 Name: ${name}
 Email: ${email}
-Phone: ${phone || ""}
+Phone: ${phone || "N/A"}
 
-Price: ${flight.price} ${flight.currency}
+Customer notes
+--------------
+${notes || "None"}
 
-Segments:
+Flight summary
+--------------
+Price shown to customer: ${flight.price} ${flight.currency}
+Stops: ${flight.stops}
+Total duration: ${flight.totalDuration}
+
+Layovers
+--------
+${layoverText}
+
+Baggage
+-------
+${baggageText}
+
+Segments
+--------
 ${flight.segments.map(
-  (s, i) =>
-    `${i + 1}. ${s.airline}${s.flightNumber} ${s.from}-${s.to}
-${s.depart} -> ${s.arrive}`
-).join("\n")}
+    (s, i) =>
+      `${i + 1}. ${s.airline}${s.flightNumber} ${s.from}-${s.to}
+Depart: ${s.depart}
+Arrive: ${s.arrive}`
+  ).join("\n\n")}
 `;
 
   try {
