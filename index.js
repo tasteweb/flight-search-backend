@@ -12,8 +12,6 @@ app.get("/", (req, res) => {
   res.send("Backend running");
 });
 
-/* ---------------- Amadeus token ---------------- */
-
 let amadeusToken = null;
 let amadeusTokenExpiry = 0;
 
@@ -33,8 +31,7 @@ async function getAmadeusToken() {
   );
 
   amadeusToken = response.data.access_token;
-  amadeusTokenExpiry =
-    now + response.data.expires_in * 1000 - 60000;
+  amadeusTokenExpiry = now + response.data.expires_in * 1000 - 60000;
 
   return amadeusToken;
 }
@@ -169,8 +166,15 @@ app.post("/api/search-flights", async (req, res) => {
     });
 
   } catch (err) {
+
     console.error("SEARCH ERROR:", err.response?.data || err.message);
-    res.status(500).json({ error: "Flight search failed" });
+
+    res
+      .status(err.response?.status || 500)
+      .json({
+        error: "Flight search failed",
+        details: err.response?.data || err.message
+      });
   }
 });
 
