@@ -55,7 +55,8 @@ async function resolveLocation(input, token) {
       params: {
         keyword: trimmed,
         subType: "AIRPORT,CITY",
-        page: { limit: 10 }
+        view: "LIGHT",
+        "page[limit]": 10
       }
     }
   );
@@ -181,7 +182,7 @@ app.post("/api/search-flights", async (req, res) => {
   }
 });
 
-/* ---------------- booking request (UPDATED ONLY HERE) ---------------- */
+/* ---------------- booking request ---------------- */
 
 app.post("/api/booking-request", async (req, res) => {
   const { name, email, phone, notes, flight } = req.body;
@@ -189,8 +190,6 @@ app.post("/api/booking-request", async (req, res) => {
   if (!name || !email || !flight) {
     return res.status(400).json({ error: "Missing fields" });
   }
-
-  /* -------- layover calculation -------- */
 
   let layoverText = "None";
 
@@ -208,8 +207,6 @@ app.post("/api/booking-request", async (req, res) => {
       layoverText += `Layover in ${flight.segments[i].to}: ${h}h ${m}m\n`;
     }
   }
-
-  /* -------- baggage formatting -------- */
 
   let baggageText = "Not available";
 
@@ -251,14 +248,15 @@ ${baggageText}
 Segments
 --------
 ${flight.segments.map(
-    (s, i) =>
-      `${i + 1}. ${s.airline}${s.flightNumber} ${s.from}-${s.to}
+  (s, i) =>
+    `${i + 1}. ${s.airline}${s.flightNumber} ${s.from}-${s.to}
 Depart: ${s.depart}
 Arrive: ${s.arrive}`
-  ).join("\n\n")}
+).join("\n\n")}
 `;
 
   try {
+
     await axios.post("https://api.smtp2go.com/v3/email/send", {
       api_key: process.env.SMTP2GO_API_KEY,
       to: [process.env.AGENCY_EMAIL],
