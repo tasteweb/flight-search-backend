@@ -39,38 +39,7 @@ async function getAmadeusToken() {
   return amadeusToken;
 }
 
-/* ---------------- city resolver ONLY ---------------- */
-
-async function resolveLocation(input, token) {
-  const trimmed = input.trim();
-
-  // allow direct IATA code (city code)
-  if (/^[a-zA-Z]{3}$/.test(trimmed)) {
-    return trimmed.toUpperCase();
-  }
-
-  const cityRes = await axios.get(
-    "https://test.api.amadeus.com/v1/reference-data/locations",
-    {
-      headers: { Authorization: `Bearer ${token}` },
-      params: {
-        keyword: trimmed,
-        subType: "CITY",
-        view: "LIGHT",
-        "page[limit]": 10
-      }
-    }
-  );
-
-  const cityData = cityRes.data?.data || [];
-  const city = cityData.find(c => c.iataCode);
-
-  if (city) return city.iataCode;
-
-  return null;
-}
-
-/* ---------------- search flights ---------------- */
+/* ---------------- search flights (IATA ONLY) ---------------- */
 
 app.post("/api/search-flights", async (req, res) => {
   try {
@@ -89,18 +58,24 @@ app.post("/api/search-flights", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    const originCode = String(origin).trim().toUpperCase();
+    const destinationCode = String(destination).trim().toUpperCase();
+
+    const iataRegex = /^[A-Z]{3}$/;
+
+    if (!iataRegex.test(originCode)) {
+      return res.status(400).json({
+        error: "Origin must be a 3-letter airport code"
+      });
+    }
+
+    if (!iataRegex.test(destinationCode)) {
+      return res.status(400).json({
+        error: "Destination must be a 3-letter airport code"
+      });
+    }
+
     const token = await getAmadeusToken();
-
-    const originCode = await resolveLocation(origin, token);
-    const destinationCode = await resolveLocation(destination, token);
-
-    if (!originCode) {
-      return res.status(400).json({ error: "Origin location not found" });
-    }
-
-    if (!destinationCode) {
-      return res.status(400).json({ error: "Destination location not found" });
-    }
 
     const params = {
       originLocationCode: originCode,
