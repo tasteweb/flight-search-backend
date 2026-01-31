@@ -39,7 +39,7 @@ async function getAmadeusToken() {
   return amadeusToken;
 }
 
-/* ---------------- city or airport resolver ---------------- */
+/* ---------------- city / airport resolver ---------------- */
 
 async function resolveLocation(input, token) {
   const trimmed = input.trim();
@@ -51,10 +51,11 @@ async function resolveLocation(input, token) {
   const res = await axios.get(
     "https://test.api.amadeus.com/v1/reference-data/locations",
     {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: {
+        Authorization: `Bearer ${token}`
+      },
       params: {
         keyword: trimmed,
-        subType: "AIRPORT,CITY",
         view: "LIGHT",
         "page[limit]": 10
       }
@@ -63,16 +64,9 @@ async function resolveLocation(input, token) {
 
   const data = res.data?.data || [];
 
-  const airport = data.find(l => l.subType === "AIRPORT");
-  const city = data.find(l => l.subType === "CITY");
+  const firstWithCode = data.find(l => l.iataCode);
 
-  if (airport) return airport.iataCode;
-  if (city) return city.iataCode;
-
-  // ---- fallback for Amadeus test environment quirks
-  if (data.length && data[0].iataCode) {
-    return data[0].iataCode;
-  }
+  if (firstWithCode) return firstWithCode.iataCode;
 
   return null;
 }
@@ -102,15 +96,11 @@ app.post("/api/search-flights", async (req, res) => {
     const destinationCode = await resolveLocation(destination, token);
 
     if (!originCode) {
-      return res.status(400).json({
-        error: "Origin location not found"
-      });
+      return res.status(400).json({ error: "Origin location not found" });
     }
 
     if (!destinationCode) {
-      return res.status(400).json({
-        error: "Destination location not found"
-      });
+      return res.status(400).json({ error: "Destination location not found" });
     }
 
     const params = {
@@ -180,10 +170,7 @@ app.post("/api/search-flights", async (req, res) => {
 
   } catch (err) {
     console.error("SEARCH ERROR:", err.response?.data || err.message);
-
-    res.status(500).json({
-      error: "Flight search failed"
-    });
+    res.status(500).json({ error: "Flight search failed" });
   }
 });
 
