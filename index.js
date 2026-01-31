@@ -12,6 +12,8 @@ app.get("/", (req, res) => {
   res.send("Backend running");
 });
 
+/* ---------------- Amadeus token ---------------- */
+
 let amadeusToken = null;
 let amadeusTokenExpiry = 0;
 
@@ -37,40 +39,33 @@ async function getAmadeusToken() {
   return amadeusToken;
 }
 
-/* ---------------- city / airport resolver ---------------- */
+/* ---------------- city resolver ONLY ---------------- */
 
 async function resolveLocation(input, token) {
   const trimmed = input.trim();
 
+  // allow direct IATA code (city code)
   if (/^[a-zA-Z]{3}$/.test(trimmed)) {
     return trimmed.toUpperCase();
   }
 
-  const res = await axios.get(
+  const cityRes = await axios.get(
     "https://test.api.amadeus.com/v1/reference-data/locations",
     {
-      headers: {
-        Authorization: `Bearer ${token}`
-      },
+      headers: { Authorization: `Bearer ${token}` },
       params: {
         keyword: trimmed,
-        subType: "AIRPORT,CITY",
+        subType: "CITY",
         view: "LIGHT",
         "page[limit]": 10
       }
     }
   );
 
-  const data = res.data?.data || [];
+  const cityData = cityRes.data?.data || [];
+  const city = cityData.find(c => c.iataCode);
 
-  const airport = data.find(l => l.subType === "AIRPORT" && l.iataCode);
-  const city = data.find(l => l.subType === "CITY" && l.iataCode);
-
-  if (airport) return airport.iataCode;
   if (city) return city.iataCode;
-
-  const firstWithCode = data.find(l => l.iataCode);
-  if (firstWithCode) return firstWithCode.iataCode;
 
   return null;
 }
@@ -173,15 +168,12 @@ app.post("/api/search-flights", async (req, res) => {
     });
 
   } catch (err) {
-
     console.error("SEARCH ERROR:", err.response?.data || err.message);
 
-    res
-      .status(err.response?.status || 500)
-      .json({
-        error: "Flight search failed",
-        details: err.response?.data || err.message
-      });
+    res.status(err.response?.status || 500).json({
+      error: "Flight search failed",
+      details: err.response?.data || err.message
+    });
   }
 });
 
