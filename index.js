@@ -4,15 +4,12 @@ import axios from "axios";
 import cors from "cors";
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.send("Backend running");
-});
+app.get("/", (req, res) => res.send("Backend running"));
 
-/* ---------------- Amadeus token ---------------- */
+/* ---------------- TOKEN ---------------- */
 
 let amadeusToken = null;
 let amadeusTokenExpiry = 0;
@@ -39,13 +36,22 @@ async function getAmadeusToken() {
   return amadeusToken;
 }
 
-/* ---------------- city or airport resolver ---------------- */
+/* ---------------- LOCATION CACHE ---------------- */
+
+const locationCache = new Map();
 
 async function resolveLocation(input, token) {
-  const trimmed = input.trim();
 
-  if (/^[a-zA-Z]{3}$/.test(trimmed)) {
-    return trimmed.toUpperCase();
+  const key = input.trim().toLowerCase();
+
+  if (locationCache.has(key)) {
+    return locationCache.get(key);
+  }
+
+  if (/^[a-zA-Z]{3}$/.test(input.trim())) {
+    const code = input.trim().toUpperCase();
+    locationCache.set(key, code);
+    return code;
   }
 
   const res = await axios.get(
@@ -53,7 +59,7 @@ async function resolveLocation(input, token) {
     {
       headers: { Authorization: `Bearer ${token}` },
       params: {
-        keyword: trimmed,
+        keyword: input,
         subType: "AIRPORT,CITY",
         page: { limit: 10 }
       }
@@ -65,16 +71,54 @@ async function resolveLocation(input, token) {
   const airport = data.find(l => l.subType === "AIRPORT");
   const city = data.find(l => l.subType === "CITY");
 
-  if (airport) return airport.iataCode;
-  if (city) return city.iataCode;
+  const result = airport?.iataCode || city?.iataCode || null;
 
-  return null;
+  if (result) locationCache.set(key, result);
+
+  return result;
 }
 
-/* ---------------- search flights ---------------- */
+/* ---------------- AUTOCOMPLETE API ---------------- */
+
+app.get("/api/locations", async (req, res) => {
+  try {
+
+    const q = req.query.q;
+    if (!q || q.length < 2) return res.json([]);
+
+    const token = await getAmadeusToken();
+
+    const r = await axios.get(
+      "https://test.api.amadeus.com/v1/reference-data/locations",
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        params: {
+          keyword: q,
+          subType: "AIRPORT,CITY",
+          page: { limit: 6 }
+        }
+      }
+    );
+
+    const out = (r.data.data || []).map(l => ({
+      name: l.name,
+      code: l.iataCode,
+      type: l.subType
+    }));
+
+    res.json(out);
+
+  } catch (e) {
+    console.error(e.response?.data || e.message);
+    res.json([]);
+  }
+});
+
+/* ---------------- SEARCH ---------------- */
 
 app.post("/api/search-flights", async (req, res) => {
   try {
+
     const {
       origin,
       destination,
@@ -95,17 +139,11 @@ app.post("/api/search-flights", async (req, res) => {
     const originCode = await resolveLocation(origin, token);
     const destinationCode = await resolveLocation(destination, token);
 
-    if (!originCode) {
-      return res.status(400).json({
-        error: "Origin location not found"
-      });
-    }
+    if (!originCode)
+      return res.status(400).json({ error: "Origin location not found" });
 
-    if (!destinationCode) {
-      return res.status(400).json({
-        error: "Destination location not found"
-      });
-    }
+    if (!destinationCode)
+      return res.status(400).json({ error: "Destination location not found" });
 
     const params = {
       originLocationCode: originCode,
@@ -121,7 +159,7 @@ app.post("/api/search-flights", async (req, res) => {
       params.returnDate = returnDate;
     }
 
-    const response = await axios.get(
+    const r = await axios.get(
       "https://test.api.amadeus.com/v2/shopping/flight-offers",
       {
         headers: { Authorization: `Bearer ${token}` },
@@ -129,31 +167,30 @@ app.post("/api/search-flights", async (req, res) => {
       }
     );
 
-    const offers = response.data?.data || [];
+    const offers = r.data?.data || [];
 
     const pageSize = 10;
     const start = (page - 1) * pageSize;
 
     const slice = offers.slice(start, start + pageSize);
 
-    const normalized = slice.map(flight => {
-      const itinerary = flight.itineraries[0];
-      const segments = itinerary.segments;
+    const results = slice.map(f => {
+      const it = f.itineraries[0];
+      const segs = it.segments;
 
       const baggage =
-        flight.travelerPricings?.[0]?.fareDetailsBySegment?.map(f => ({
-          segmentId: f.segmentId,
-          checkedBags: f.includedCheckedBags?.quantity ?? 0,
-          cabinBags: f.includedCabinBags?.quantity ?? 0
+        f.travelerPricings?.[0]?.fareDetailsBySegment?.map(x => ({
+          checkedBags: x.includedCheckedBags?.quantity ?? 0,
+          cabinBags: x.includedCabinBags?.quantity ?? 0
         })) || [];
 
       return {
-        id: flight.id,
-        price: flight.price.grandTotal,
-        currency: flight.price.currency,
-        totalDuration: itinerary.duration,
-        stops: segments.length - 1,
-        segments: segments.map(s => ({
+        id: f.id,
+        price: f.price.grandTotal,
+        currency: f.price.currency,
+        totalDuration: it.duration,
+        stops: segs.length - 1,
+        segments: segs.map(s => ({
           from: s.departure.iataCode,
           to: s.arrival.iataCode,
           depart: s.departure.at,
@@ -166,24 +203,18 @@ app.post("/api/search-flights", async (req, res) => {
       };
     });
 
-    res.json({
-      page,
-      total: offers.length,
-      results: normalized
-    });
+    res.json({ page, total: offers.length, results });
 
-  } catch (err) {
-    console.error("SEARCH ERROR:", err.response?.data || err.message);
-
-    res.status(500).json({
-      error: "Flight search failed"
-    });
+  } catch (e) {
+    console.error(e.response?.data || e.message);
+    res.status(500).json({ error: "Flight search failed" });
   }
 });
 
-/* ---------------- booking request (unchanged) ---------------- */
+/* ---------------- BOOKING ---------------- */
 
 app.post("/api/booking-request", async (req, res) => {
+
   const { name, email, phone, notes, flight } = req.body;
 
   if (!name || !email || !flight) {
@@ -197,17 +228,15 @@ Name: ${name}
 Email: ${email}
 Phone: ${phone || ""}
 
-Price: ${flight.price} ${flight.currency}
+Price: ${flight.price}
 
-Segments:
 ${flight.segments.map(
-  (s, i) =>
-    `${i + 1}. ${s.airline}${s.flightNumber} ${s.from}-${s.to}
-${s.depart} -> ${s.arrive}`
-).join("\n")}
+    s => `${s.airline}${s.flightNumber} ${s.from}-${s.to}`
+  ).join("\n")}
 `;
 
   try {
+
     await axios.post("https://api.smtp2go.com/v3/email/send", {
       api_key: process.env.SMTP2GO_API_KEY,
       to: [process.env.AGENCY_EMAIL],
@@ -220,9 +249,9 @@ ${s.depart} -> ${s.arrive}`
       api_key: process.env.SMTP2GO_API_KEY,
       to: [email],
       sender: process.env.FROM_EMAIL,
-      subject: "We received your booking request",
+      subject: "Booking request received",
       text_body:
-        "Thank you. Your request was received. Our agency will contact you shortly."
+        "Thank you. Your booking request was received. Our agency will contact you shortly."
     });
 
     res.json({ success: true });
