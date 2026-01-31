@@ -31,7 +31,8 @@ async function getAmadeusToken() {
   );
 
   amadeusToken = response.data.access_token;
-  amadeusTokenExpiry = now + response.data.expires_in * 1000 - 60000;
+  amadeusTokenExpiry =
+    now + response.data.expires_in * 1000 - 60000;
 
   return amadeusToken;
 }
@@ -53,6 +54,7 @@ async function resolveLocation(input, token) {
       },
       params: {
         keyword: trimmed,
+        subType: "AIRPORT,CITY",
         view: "LIGHT",
         "page[limit]": 10
       }
@@ -61,8 +63,13 @@ async function resolveLocation(input, token) {
 
   const data = res.data?.data || [];
 
-  const firstWithCode = data.find(l => l.iataCode);
+  const airport = data.find(l => l.subType === "AIRPORT" && l.iataCode);
+  const city = data.find(l => l.subType === "CITY" && l.iataCode);
 
+  if (airport) return airport.iataCode;
+  if (city) return city.iataCode;
+
+  const firstWithCode = data.find(l => l.iataCode);
   if (firstWithCode) return firstWithCode.iataCode;
 
   return null;
