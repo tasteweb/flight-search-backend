@@ -108,11 +108,22 @@ app.post("/api/search-flights", async (req, res) => {
 
     const normalized = slice.map(flight => {
 
-      /* ---------------- FIX: include ALL itineraries ---------------- */
-
       const itineraries = flight.itineraries || [];
 
-      const segments = itineraries.flatMap(it => it.segments || []);
+      const segments = itineraries.flatMap((it, legIndex) =>
+        (it.segments || []).map(s => ({
+          from: s.departure.iataCode,
+          to: s.arrival.iataCode,
+          depart: s.departure.at,
+          arrive: s.arrival.at,
+          airline: s.carrierCode,
+          flightNumber: s.number,
+          duration: s.duration,
+
+          /* ---- added ---- */
+          legIndex   // 0 = outbound, 1 = return
+        }))
+      );
 
       const stops = itineraries.reduce((sum, it) => {
         return sum + Math.max(0, (it.segments?.length || 0) - 1);
@@ -129,23 +140,16 @@ app.post("/api/search-flights", async (req, res) => {
         id: flight.id,
         price: flight.price.grandTotal,
         currency: flight.price.currency,
-
-        /* keep original total duration (outbound duration only – frontend expects this format) */
         totalDuration: itineraries[0]?.duration || "",
-
         stops,
+        segments,
+        baggage,
 
-        segments: segments.map(s => ({
-          from: s.departure.iataCode,
-          to: s.arrival.iataCode,
-          depart: s.departure.at,
-          arrive: s.arrival.at,
-          airline: s.carrierCode,
-          flightNumber: s.number,
-          duration: s.duration
-        })),
-
-        baggage
+        /* ---- added so booking email can show pax counts ---- */
+        passengers: {
+          adults: Number(adults),
+          children: Number(children || 0)
+        }
       };
     });
 
@@ -174,20 +178,38 @@ app.post("/api/booking-request", async (req, res) => {
     return res.status(400).json({ error: "Missing fields" });
   }
 
+  const adults =
+    flight.passengers?.adults ?? "N/A";
+
+  const children =
+    flight.passengers?.children ?? "N/A";
+
   let layoverText = "None";
 
   if (flight.segments && flight.segments.length > 1) {
-    layoverText = "";
+
+    let rows = [];
 
     for (let i = 0; i < flight.segments.length - 1; i++) {
-      const arrive = new Date(flight.segments[i].arrive);
-      const depart = new Date(flight.segments[i + 1].depart);
+
+      const a = flight.segments[i];
+      const b = flight.segments[i + 1];
+
+      /* ---- FIX: only if same leg (no outbound → return gap) ---- */
+      if (a.legIndex !== b.legIndex) continue;
+
+      const arrive = new Date(a.arrive);
+      const depart = new Date(b.depart);
 
       const mins = Math.floor((depart - arrive) / 60000);
       const h = Math.floor(mins / 60);
       const m = mins % 60;
 
-      layoverText += `Layover in ${flight.segments[i].to}: ${h}h ${m}m\n`;
+      rows.push(`Layover in ${a.to}: ${h}h ${m}m`);
+    }
+
+    if (rows.length) {
+      layoverText = rows.join("\n");
     }
   }
 
@@ -209,6 +231,11 @@ Customer details
 Name: ${name}
 Email: ${email}
 Phone: ${phone || "N/A"}
+
+Passengers
+----------
+Adults: ${adults}
+Children: ${children}
 
 Customer notes
 --------------
