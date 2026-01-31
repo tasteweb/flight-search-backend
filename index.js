@@ -107,8 +107,16 @@ app.post("/api/search-flights", async (req, res) => {
     const slice = offers.slice(start, start + pageSize);
 
     const normalized = slice.map(flight => {
-      const itinerary = flight.itineraries[0];
-      const segments = itinerary.segments;
+
+      /* ---------------- FIX: include ALL itineraries ---------------- */
+
+      const itineraries = flight.itineraries || [];
+
+      const segments = itineraries.flatMap(it => it.segments || []);
+
+      const stops = itineraries.reduce((sum, it) => {
+        return sum + Math.max(0, (it.segments?.length || 0) - 1);
+      }, 0);
 
       const baggage =
         flight.travelerPricings?.[0]?.fareDetailsBySegment?.map(f => ({
@@ -121,8 +129,12 @@ app.post("/api/search-flights", async (req, res) => {
         id: flight.id,
         price: flight.price.grandTotal,
         currency: flight.price.currency,
-        totalDuration: itinerary.duration,
-        stops: segments.length - 1,
+
+        /* keep original total duration (outbound duration only – frontend expects this format) */
+        totalDuration: itineraries[0]?.duration || "",
+
+        stops,
+
         segments: segments.map(s => ({
           from: s.departure.iataCode,
           to: s.arrival.iataCode,
@@ -132,6 +144,7 @@ app.post("/api/search-flights", async (req, res) => {
           flightNumber: s.number,
           duration: s.duration
         })),
+
         baggage
       };
     });
