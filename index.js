@@ -69,6 +69,11 @@ async function resolveLocation(input, token) {
   if (airport) return airport.iataCode;
   if (city) return city.iataCode;
 
+  // ---- fallback for Amadeus test environment quirks
+  if (data.length && data[0].iataCode) {
+    return data[0].iataCode;
+  }
+
   return null;
 }
 
